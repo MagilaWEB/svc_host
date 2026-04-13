@@ -32,11 +32,13 @@ private:
 	static void WINAPI ServiceCtrlHandler(DWORD ctrl) noexcept;
 
 	static void										 UpdateStatus(DWORD state, DWORD exitCode = NO_ERROR, DWORD waitHint = 0) noexcept;
-	static std::wstring								 BuildCommandLine(std::span<LPWSTR> args);
+
 	static std::expected<PROCESS_INFORMATION, DWORD> LaunchChild(std::wstring_view cmdLine);
+	static UniqueHandle								 CreateJobAndAssignProcess(HANDLE hProcess);
 
 	inline static SERVICE_STATUS		s_Status{};
 	inline static SERVICE_STATUS_HANDLE s_StatusHandle{};
 	inline static UniqueHandle			s_hChildProcess;
 	inline static UniqueHandle			s_hStopEvent;
+	inline static UniqueHandle			s_hJob;	   // Job object
 };
