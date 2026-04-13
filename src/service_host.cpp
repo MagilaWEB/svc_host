@@ -80,16 +80,6 @@ void WINAPI ServiceHost::ServiceMain(DWORD argc, LPWSTR* argv)
 
 		UpdateStatus(SERVICE_RUNNING, NO_ERROR, 0);
 
-		DWORD exitCode = 0;
-		if (WaitForSingleObject(s_hChildProcess.get(), 5'000) == WAIT_OBJECT_0)
-		{
-			GetExitCodeProcess(s_hChildProcess.get(), &exitCode);
-			std::wofstream log(L"C:\\svchost_debug.log", std::ios::app);
-			log << L"Child process exited early with code: " << exitCode << std::endl;
-			UpdateStatus(SERVICE_STOPPED, exitCode, 0);
-			return;
-		}
-
 		std::array<HANDLE, 2> handles{ s_hStopEvent.get(), s_hChildProcess.get() };
 		DWORD				  waitResult = WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), FALSE, INFINITE);
 
@@ -138,8 +128,6 @@ void ServiceHost::UpdateStatus(DWORD state, DWORD exitCode, DWORD waitHint) noex
 
 std::expected<PROCESS_INFORMATION, DWORD> ServiceHost::LaunchChild(std::wstring_view cmdLine)
 {
-	std::wofstream log(L"C:\\svchost_debug.log", std::ios::app);
-	log << L"LaunchChild: " << cmdLine << std::endl;
 	std::wstring cmd(cmdLine);
 	std::wstring exePath;
 
@@ -168,26 +156,11 @@ std::expected<PROCESS_INFORMATION, DWORD> ServiceHost::LaunchChild(std::wstring_
 	si.wShowWindow = SW_HIDE;
 
 	PROCESS_INFORMATION pi{};
-	BOOL				success = CreateProcessW(
-		   nullptr,
-		   cmd.data(),
-		   nullptr,
-		   nullptr,
-		   FALSE,
-		   CREATE_NEW_CONSOLE,
-		   nullptr,
-		   workingDir.empty() ? nullptr : workingDir.c_str(),
-		   &si,
-		   &pi
-	   );
-	if (!success)
-	{
-		DWORD err = GetLastError();
-		log << L"CreateProcess failed, error: " << err << std::endl;
-		return std::unexpected(err);
-	}
-	log << L"Process created, PID: " << pi.dwProcessId << std::endl;
-	return pi;
+	LPWSTR				lpWorkingDir = workingDir.empty() ? nullptr : workingDir.data();
+
+	if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, lpWorkingDir, &si, &pi))
+		return pi;
+
 	return std::unexpected(GetLastError());
 }
 
