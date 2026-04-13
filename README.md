@@ -1,1 +1,106 @@
-# svc_host
+# SvcHost
+
+**Универсальный хост для запуска консольных приложений как служб Windows**
+
+```SvcHost``` — это лёгкая служба Windows, которая позволяет запускать **любое консольное приложение** (включая Python-скрипты, Node.js, batch-файлы и т. д.) как полноценную службу Windows с корректной обработкой сигналов остановки (```Ctrl+C```).
+
+## Особенности
+
+- **Корректная остановка** — при остановке службы дочернему процессу отправляется ```CTRL_C_EVENT```, что позволяет приложению штатно завершить работу (например, ```asyncio``` в Python).
+- **Не требует модификации целевого приложения** — запускайте любые ```.exe``` как службы без изменений в их коде.
+- **Современный C++23** — использует ```std::expected```, ```std::span```, ```std::views``` и другие возможности нового стандарта.
+- **Поддержка MSVC и Clang** — единый код для всех основных компиляторов Windows.
+
+## Требования
+
+- Windows 7 / 8 / 10 / 11 или Windows Server 2008 R2+
+- CMake 3.20 или выше
+- Компилятор с поддержкой C++23:
+  - Microsoft Visual Studio 2022 (MSVC)
+  - Clang 20+
+
+## Сборка
+
+### Клонирование репозитория
+
+```bash
+git clone https://github.com/MagilaWEB/svc_host.git
+cd svc_host
+```
+
+### Конфигурация через CMake Presets
+
+В проекте настроены пресеты для MSVC и Clang.
+
+**Сборка с MSVC (Release):**
+
+```bash
+cmake --preset release
+cmake --build --preset release
+```
+
+**Сборка с Clang (Release):**
+
+```bash
+cmake --preset clang-release
+cmake --build --preset clang-release
+```
+
+Готовый исполняемый файл будет находиться в:
+- ```_build/msvc/Release/SvcHost.exe``` (для MSVC)
+- ```_build/clang/Release/SvcHost.exe``` (для Clang)
+
+## Использование
+
+```SvcHost.exe``` регистрируется как служба и принимает в аргументах путь к целевому ```.exe``` и его аргументы.
+
+### Установка и запуск службы
+
+```bash
+sc create MyService binPath= "\"C:\Path\To\SvcHost.exe\" \"C:\Path\To\YourApp.exe\" --your-arg value"
+sc description MyService "Моя служба на базе SvcHost"
+sc start MyService
+```
+
+### Интеграция с собственным менеджером служб (C++)
+
+Если у вас уже есть класс для управления службами, достаточно указать ```SvcHost.exe``` как исполняемый файл службы и передать нужные аргументы.
+
+```cpp
+Service yourApp("YourApp", "SvcHost.exe");
+yourApp.setDescription("SvcHost Description");
+yourApp.setArgs({
+    (Core::get().binariesPath() / "yourApp.exe").string(),
+    "--secret", secret,
+    "--port",   std::to_string(port)
+});
+yourApp.create();
+yourApp.start();
+```
+
+## Остановка и удаление
+
+```bash
+sc stop MyService
+sc delete MyService
+```
+
+При остановке службы ```SvcHost``` посылает дочернему процессу ```Ctrl+C```, давая ему 15 секунд на корректное завершение. Если за это время процесс не завершится, он будет принудительно снят.
+
+## Важные замечания
+
+- **Консоль дочернего процесса скрыта**: используется флаг ```CREATE_NEW_CONSOLE``` в сочетании с ```SW_HIDE``` — окно консоли не отображается, но ```Ctrl+C``` обрабатывается корректно.
+- **Обработка Ctrl+C в Python**: ваш Python-скрипт должен корректно перехватывать ```KeyboardInterrupt``` (например, через ```asyncio.run()``` или явный блок ```try/except```).
+
+## Лицензия
+
+Проект распространяется под лицензией **MIT**. Полный текст доступен в файле [LICENSE](./LICENSE).
+
+## Автор
+
+**MagilaWEB**  
+GitHub: [https://github.com/MagilaWEB](https://github.com/MagilaWEB)
+
+---
+
+*Сделано с любовью для сообщества разработчиков.*
