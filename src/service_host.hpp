@@ -14,6 +14,15 @@ struct HandleDeleter
 };
 using UniqueHandle = std::unique_ptr<std::remove_pointer_t<HANDLE>, HandleDeleter>;
 
+struct LaunchResult
+{
+	UniqueHandle hProcess;
+	UniqueHandle hThread;
+	UniqueHandle hStdoutRead;
+	UniqueHandle hStderrRead;
+	DWORD		 dwProcessId;
+};
+
 class ServiceHost
 {
 public:
@@ -33,12 +42,11 @@ private:
 
 	static void										 UpdateStatus(DWORD state, DWORD exitCode = NO_ERROR, DWORD waitHint = 0) noexcept;
 
-	static std::expected<PROCESS_INFORMATION, DWORD> LaunchChild(std::wstring_view cmdLine);
+	static std::expected<LaunchResult, DWORD> LaunchChild(std::wstring_view cmdLine);
 	static UniqueHandle								 CreateJobAndAssignProcess(HANDLE hProcess);
 
 	inline static SERVICE_STATUS		s_Status{};
 	inline static SERVICE_STATUS_HANDLE s_StatusHandle{};
-	inline static UniqueHandle			s_hChildProcess;
 	inline static UniqueHandle			s_hStopEvent;
 	inline static UniqueHandle			s_hJob;	   // Job object
 };

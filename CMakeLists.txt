@@ -11,11 +11,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Исходные файлы
 set(SOURCES
+    src/logger.cpp
     src/service_host.cpp
     src/main.cpp
 )
 
 set(HEADERS
+    src/logger.hpp
     src/service_host.hpp
 )
 
