@@ -7,6 +7,7 @@
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <filesystem>
 
 enum class LogLevel
 {
@@ -24,7 +25,7 @@ private:
 	template<typename... Args>
 	std::wstring msg(std::wstring_view message, Args&&... args)
 	{
-		std::lock_guard lock(m_mutex);
+		std::lock_guard lock(_mutex);
 
 		return std::vformat(message, std::make_wformat_args(args...));
 	}
@@ -32,8 +33,8 @@ private:
 public:
 	static Logger& get();
 
-	void SetLogLevel(LogLevel level);
-	void SetLogFile(const std::wstring& path);
+	void setLogLevel(LogLevel level);
+	void setLogFile(std::filesystem::path path);
 
 	template<typename... Args>
 	void debug(std::wstring_view message, Args&&... args)
@@ -65,11 +66,13 @@ private:
 	Logger(const Logger&)			 = delete;
 	Logger& operator=(const Logger&) = delete;
 
+	void _logOpen();
+
 	std::wstring GetTimestamp() const;
 	std::wstring LevelToString(LogLevel level) const;
 
-	LogLevel	   m_level = LogLevel::Info;
-	std::wstring   m_logFilePath;
-	std::wofstream m_fileStream;
-	std::mutex	   m_mutex;
+	LogLevel			  _level = LogLevel::Info;
+	std::filesystem::path _log_file_path;
+	std::wofstream		  _file_stream;
+	std::mutex			  _mutex;
 };

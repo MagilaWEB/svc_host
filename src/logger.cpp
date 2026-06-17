@@ -12,48 +12,56 @@ Logger::Logger()
 	wchar_t path[MAX_PATH];
 	GetModuleFileNameW(nullptr, path, MAX_PATH);
 	std::filesystem::path exePath(path);
-	m_logFilePath = (exePath.parent_path() / L"SvcHost.log").wstring();
-	m_fileStream.open(m_logFilePath, std::ios::out | std::ios::trunc);
-
-	if (!m_fileStream.is_open())
-		m_fileStream.open(m_logFilePath, std::ios::out | std::ios::app);
+	_log_file_path = (exePath.parent_path() / L"SvcHost.log").wstring();
 }
 
-void Logger::SetLogLevel(LogLevel level)
+void Logger::setLogLevel(LogLevel level)
 {
-	std::lock_guard lock(m_mutex);
-	m_level = level;
+	std::lock_guard lock(_mutex);
+	_level = level;
 }
 
-void Logger::SetLogFile(const std::wstring& path)
+void Logger::setLogFile(std::filesystem::path path)
 {
-	std::lock_guard lock(m_mutex);
+	std::lock_guard lock(_mutex);
 
-	if (m_fileStream.is_open())
-		m_fileStream.close();
+	if (_file_stream.is_open())
+		_file_stream.close();
 
-	m_logFilePath = path;
-	m_fileStream.open(m_logFilePath, std::ios::out | std::ios::app);
+	_log_file_path = path;
 }
 
 void Logger::Log(LogLevel level, std::wstring_view message)
 {
-	if (level < m_level)
+	if (level < _level)
 		return;
+
+	_logOpen();
 
 	std::wstring formatted = GetTimestamp() + L" [" + LevelToString(level) + L"] " + std::wstring(message);
 
 	{
-		std::lock_guard lock(m_mutex);
-		if (m_fileStream.is_open())
+		std::lock_guard lock(_mutex);
+		if (_file_stream.is_open())
 		{
-			m_fileStream << formatted << std::endl;
-			m_fileStream.flush();
+			_file_stream << formatted << std::endl;
+			_file_stream.flush();
 		}
 	}
 
 	// IDE
 	OutputDebugStringW((formatted + L"\n").c_str());
+}
+
+void Logger::_logOpen()
+{
+	if (_file_stream.is_open())
+		return;
+
+	_file_stream.open(_log_file_path, std::ios::out | std::ios::trunc);
+
+	if (!_file_stream.is_open())
+		_file_stream.open(_log_file_path, std::ios::out | std::ios::app);
 }
 
 std::wstring Logger::GetTimestamp() const

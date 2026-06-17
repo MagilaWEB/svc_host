@@ -18,15 +18,17 @@ static std::wstring Utf8ToWide(std::string_view utf8)
 {
 	if (utf8.empty())
 		return L"";
-	int len = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(), nullptr, 0);
+
+	int len = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
 	if (len <= 0)
 		return L"";
+
 	std::wstring wide(len, L'\0');
-	MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(), wide.data(), len);
+	MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wide.data(), len);
 	return wide;
 }
 
-static void ReadPipeToLogger(HANDLE hPipe, const std::wstring& prefix)
+static void ReadPipeToLogger(HANDLE hPipe, std::wstring_view prefix)
 {
 	char		buffer[4'096];
 	DWORD		bytesRead;
@@ -49,18 +51,16 @@ static void ReadPipeToLogger(HANDLE hPipe, const std::wstring& prefix)
 				lineBuffer.append(chunk.substr(start, end - start));
 				if (!lineBuffer.empty() && lineBuffer.back() == '\r')
 					lineBuffer.pop_back();
-				std::wstring wline = Utf8ToWide(lineBuffer);
-				Logger::get().info(L"{}: {}", prefix, wline);
+
+				Logger::get().info(L"{}: {}", prefix, Utf8ToWide(lineBuffer));
 				lineBuffer.clear();
 				start = end + 1;
 			}
 		}
 	}
+
 	if (!lineBuffer.empty())
-	{
-		std::wstring wline = Utf8ToWide(lineBuffer);
-		Logger::get().info(L"{}: {}", prefix, wline);
-	}
+		Logger::get().info(L"{}: {}", prefix, Utf8ToWide(lineBuffer));
 }
 
 int ServiceHost::Run(int argc, wchar_t* /*argv*/[])
@@ -68,10 +68,8 @@ int ServiceHost::Run(int argc, wchar_t* /*argv*/[])
 	if (argc < 2)
 		return 1;
 
-	Logger::get().info(L"Service Run");
-
 	SERVICE_TABLE_ENTRYW serviceTable[] = {
-		{ const_cast<LPWSTR>(L"SvcHost"), ServiceMain },
+		{ const_cast<LPWSTR>(L"SvcHost"), _serviceMain },
 		{						nullptr,	   nullptr }
 	};
 
@@ -81,82 +79,62 @@ int ServiceHost::Run(int argc, wchar_t* /*argv*/[])
 	return 0;
 }
 
-void WINAPI ServiceHost::ServiceMain(DWORD argc, LPWSTR* argv)
+void WINAPI ServiceHost::_serviceMain(DWORD argc, LPWSTR* argv)
 {
-	s_StatusHandle = RegisterServiceCtrlHandlerW(L"SvcHost", ServiceCtrlHandler);
-	if (!s_StatusHandle)
+	_status_handle = RegisterServiceCtrlHandlerW(L"SvcHost", _serviceCtrlHandler);
+	if (!_status_handle)
 		return;
 
-	Logger::get().info(L"ServiceMain Run");
-
-	s_Status.dwServiceType		= SERVICE_WIN32_OWN_PROCESS;
-	s_Status.dwControlsAccepted = SERVICE_ACCEPT_STOP;
-	UpdateStatus(SERVICE_START_PENDING, NO_ERROR, 3'000);
-
-	s_hStopEvent.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
-	if (!s_hStopEvent)
+	auto cmd_line = _commandLine(argc, argv);
+	if (cmd_line.empty())
 	{
-		UpdateStatus(SERVICE_STOPPED, GetLastError(), 0);
-		Logger::get().warning(L"s_hStopEvent service STOPPED!");
+		_updateStatus(SERVICE_STOPPED, ERROR_BAD_ARGUMENTS, 0);
+		Logger::get().error(L"cmd_line empty ERROR_BAD_ARGUMENTS service STOPPED!");
 		return;
 	}
 
-	std::wstring cmdLine;
-
-	if (argc < 2)
+	if (cmd_line.front() == L'"')
 	{
-		LPWSTR	pFullCmd  = GetCommandLineW();
-		int		localArgc = 0;
-		LPWSTR* localArgv = CommandLineToArgvW(pFullCmd, &localArgc);
-		if (localArgv && localArgc >= 2)
-		{
-			for (int i = 1; i < localArgc; ++i)
-			{
-				if (i > 1)
-					cmdLine += L" ";
-
-				std::wstring arg = localArgv[i];
-				if (arg.find(L' ') != std::wstring::npos)
-				{
-					cmdLine += L'"';
-					cmdLine += arg;
-					cmdLine += L'"';
-				}
-				else
-					cmdLine += arg;
-			}
-
-			LocalFree(localArgv);
-		}
+		size_t endQuote = cmd_line.find(L'"', 1);
+		if (endQuote != std::wstring::npos)
+			_exe_path = cmd_line.substr(1, endQuote - 1);
 	}
 	else
 	{
-		for (DWORD i = 1; i < argc; ++i)
-		{
-			if (i > 1)
-				cmdLine += L" ";
-
-			std::wstring arg = argv[i];
-			if (arg.size() >= 2 && arg.front() == L'"' && arg.back() == L'"')
-				arg = arg.substr(1, arg.size() - 2);
-
-			cmdLine += arg;
-		}
+		size_t spacePos = cmd_line.find(L' ');
+		if (spacePos != std::wstring::npos)
+			_exe_path = cmd_line.substr(0, spacePos);
+		else
+			_exe_path = cmd_line;
 	}
 
-	if (cmdLine.empty())
+	_exe_name = _exe_path.filename().wstring();
+
+	_working_dir = _exe_path.parent_path();
+
+	Logger::get().setLogFile(_working_dir / (_exe_name + L".log"));
+
+	Logger::get().info(L"_serviceMain Run");
+	Logger::get().info(L"_launchChild cmd[{}].", cmd_line);
+	Logger::get().info(L"_launchChild _exe_path[{}].", _exe_path.wstring());
+	Logger::get().info(L"_launchChild _working_dir[{}].", _working_dir.wstring());
+
+	_status.dwServiceType	   = SERVICE_WIN32_OWN_PROCESS;
+	_status.dwControlsAccepted = SERVICE_ACCEPT_STOP;
+	_updateStatus(SERVICE_START_PENDING, NO_ERROR, 3'000);
+
+	_h_stop_event.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+	if (!_h_stop_event)
 	{
-		UpdateStatus(SERVICE_STOPPED, ERROR_BAD_ARGUMENTS, 0);
-		Logger::get().error(L"cmdLine empty ERROR_BAD_ARGUMENTS service STOPPED!");
+		_updateStatus(SERVICE_STOPPED, GetLastError(), 0);
+		Logger::get().warning(L"_h_stop_event service STOPPED!");
 		return;
 	}
 
-	Logger::get().info(L"cmdLine [{}]", cmdLine);
-
-	auto launchResult = LaunchChild(cmdLine);
+	auto launchResult = _launchChild(cmd_line);
 	if (!launchResult)
 	{
-		UpdateStatus(SERVICE_STOPPED, launchResult.error(), 0);
+		_updateStatus(SERVICE_STOPPED, launchResult.error(), 0);
 		Logger::get().error(L"LaunchChild failed, error [{}], service STOPPED!", launchResult.error());
 		return;
 	}
@@ -171,12 +149,12 @@ void WINAPI ServiceHost::ServiceMain(DWORD argc, LPWSTR* argv)
 
 	if (res.hProcess)
 	{
-		s_hJob = CreateJobAndAssignProcess(res.hProcess.get());
+		_h_job = _createJobAndAssignProcess(res.hProcess.get());
 
-		UpdateStatus(SERVICE_RUNNING, NO_ERROR, 0);
+		_updateStatus(SERVICE_RUNNING, NO_ERROR, 0);
 		Logger::get().info(L"Service RUNNING! PID: {}", res.dwProcessId);
 
-		std::array<HANDLE, 2> handles{ s_hStopEvent.get(), res.hProcess.get() };
+		std::array<HANDLE, 2> handles{ _h_stop_event.get(), res.hProcess.get() };
 		DWORD				  waitResult = WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), FALSE, INFINITE);
 
 		if (waitResult == WAIT_OBJECT_0)
@@ -199,67 +177,41 @@ void WINAPI ServiceHost::ServiceMain(DWORD argc, LPWSTR* argv)
 			}
 		}
 
-		if (s_hJob)
+		if (_h_job)
 		{
-			s_hJob.reset();
+			_h_job.reset();
 			Logger::get().info(L"Job object closed. Any remaining processes in job are terminated.");
 		}
 
 		res.hProcess.reset();
 	}
 
-	UpdateStatus(SERVICE_STOPPED, NO_ERROR, 0);
+	_updateStatus(SERVICE_STOPPED, NO_ERROR, 0);
 	Logger::get().info(L"Service STOPPED!");
 }
 
-void WINAPI ServiceHost::ServiceCtrlHandler(DWORD ctrl) noexcept
+void WINAPI ServiceHost::_serviceCtrlHandler(DWORD ctrl) noexcept
 {
 	if (ctrl == SERVICE_CONTROL_STOP)
 	{
-		UpdateStatus(SERVICE_STOP_PENDING, NO_ERROR, 3'000);
-		SetEvent(s_hStopEvent.get());
+		_updateStatus(SERVICE_STOP_PENDING, NO_ERROR, 3'000);
+		SetEvent(_h_stop_event.get());
 	}
 }
 
-void ServiceHost::UpdateStatus(DWORD state, DWORD exitCode, DWORD waitHint) noexcept
+void ServiceHost::_updateStatus(DWORD state, DWORD exitCode, DWORD waitHint) noexcept
 {
-	static DWORD checkpoint	 = 1;
-	s_Status.dwCurrentState	 = state;
-	s_Status.dwWin32ExitCode = exitCode;
-	s_Status.dwWaitHint		 = waitHint;
-	s_Status.dwCheckPoint	 = (state == SERVICE_RUNNING || state == SERVICE_STOPPED) ? 0 : checkpoint++;
-	SetServiceStatus(s_StatusHandle, &s_Status);
+	static DWORD checkpoint = 1;
+	_status.dwCurrentState	= state;
+	_status.dwWin32ExitCode = exitCode;
+	_status.dwWaitHint		= waitHint;
+	_status.dwCheckPoint	= (state == SERVICE_RUNNING || state == SERVICE_STOPPED) ? 0 : checkpoint++;
+	SetServiceStatus(_status_handle, &_status);
 }
 
-std::expected<LaunchResult, DWORD> ServiceHost::LaunchChild(std::wstring_view cmdLine)
+std::expected<LaunchResult, DWORD> ServiceHost::_launchChild(std::wstring_view cmd_line)
 {
-	std::wstring cmd(cmdLine);
-	std::wstring exePath;
-
-	if (cmd.front() == L'"')
-	{
-		size_t endQuote = cmd.find(L'"', 1);
-		if (endQuote != std::wstring::npos)
-			exePath = cmd.substr(1, endQuote - 1);
-	}
-	else
-	{
-		size_t spacePos = cmd.find(L' ');
-		if (spacePos != std::wstring::npos)
-			exePath = cmd.substr(0, spacePos);
-		else
-			exePath = cmd;
-	}
-
-	Logger::get().info(L"LaunchChild exePath[{}].", exePath);
-	Logger::get().info(L"LaunchChild cmd[{}].", cmd);
-
-	std::wstring workingDir;
-	size_t		 lastSlash = exePath.find_last_of(L"\\/");
-	if (lastSlash != std::wstring::npos)
-		workingDir = exePath.substr(0, lastSlash);
-
-	Logger::get().info(L"LaunchChild workingDir[{}].", workingDir);
+	std::wstring cmd(cmd_line);
 
 	SECURITY_ATTRIBUTES sa			= { sizeof(sa), nullptr, TRUE };
 	HANDLE				hStdoutRead = nullptr, hStdoutWrite = nullptr;
@@ -267,6 +219,7 @@ std::expected<LaunchResult, DWORD> ServiceHost::LaunchChild(std::wstring_view cm
 
 	if (!CreatePipe(&hStdoutRead, &hStdoutWrite, &sa, 0))
 		return std::unexpected(GetLastError());
+
 	if (!CreatePipe(&hStderrRead, &hStderrWrite, &sa, 0))
 	{
 		CloseHandle(hStdoutRead);
@@ -286,7 +239,6 @@ std::expected<LaunchResult, DWORD> ServiceHost::LaunchChild(std::wstring_view cm
 	si.hStdInput   = nullptr;
 
 	PROCESS_INFORMATION pi{};
-	LPWSTR				lpWorkingDir = workingDir.empty() ? nullptr : workingDir.data();
 
 	BOOL success = CreateProcessW(
 		nullptr,
@@ -296,7 +248,7 @@ std::expected<LaunchResult, DWORD> ServiceHost::LaunchChild(std::wstring_view cm
 		TRUE,		// bInheritHandles
 		0,			// dwCreationFlags
 		nullptr,	// lpEnvironment
-		lpWorkingDir,
+		_working_dir.wstring().c_str(),
 		&si,
 		&pi
 	);
@@ -322,19 +274,67 @@ std::expected<LaunchResult, DWORD> ServiceHost::LaunchChild(std::wstring_view cm
 	return result;
 }
 
-UniqueHandle ServiceHost::CreateJobAndAssignProcess(HANDLE hProcess)
+UniqueHandle ServiceHost::_createJobAndAssignProcess(HANDLE hProcess)
 {
-	UniqueHandle hJob(CreateJobObjectW(nullptr, nullptr));
-	if (!hJob)
+	UniqueHandle h_job(CreateJobObjectW(nullptr, nullptr));
+	if (!h_job)
 		return nullptr;
 
 	JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
 	jeli.BasicLimitInformation.LimitFlags	  = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-	if (!SetInformationJobObject(hJob.get(), JobObjectExtendedLimitInformation, &jeli, sizeof(jeli)))
+	if (!SetInformationJobObject(h_job.get(), JobObjectExtendedLimitInformation, &jeli, sizeof(jeli)))
 		return nullptr;
 
-	if (!AssignProcessToJobObject(hJob.get(), hProcess))
+	if (!AssignProcessToJobObject(h_job.get(), hProcess))
 		return nullptr;
 
-	return hJob;
+	return h_job;
+}
+
+std::wstring ServiceHost::_commandLine(DWORD argc, LPWSTR* argv)
+{
+	std::wstring cmd_line;
+
+	if (argc < 2)
+	{
+		LPWSTR	pFullCmd   = GetCommandLineW();
+		int		local_argc = 0;
+		LPWSTR* local_argv = CommandLineToArgvW(pFullCmd, &local_argc);
+		if (local_argv && local_argc >= 2)
+		{
+			for (int i = 1; i < local_argc; ++i)
+			{
+				if (i > 1)
+					cmd_line += L" ";
+
+				std::wstring arg = local_argv[i];
+				if (arg.find(L' ') != std::wstring::npos)
+				{
+					cmd_line += L'"';
+					cmd_line += arg;
+					cmd_line += L'"';
+				}
+				else
+					cmd_line += arg;
+			}
+
+			LocalFree(local_argv);
+		}
+	}
+	else
+	{
+		for (DWORD i = 1; i < argc; ++i)
+		{
+			if (i > 1)
+				cmd_line += L" ";
+
+			std::wstring arg = argv[i];
+			if (arg.size() >= 2 && arg.front() == L'"' && arg.back() == L'"')
+				arg = arg.substr(1, arg.size() - 2);
+
+			cmd_line += arg;
+		}
+	}
+
+	return cmd_line;
 }

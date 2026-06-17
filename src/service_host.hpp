@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include <span>
+#include <filesystem>
 
 struct HandleDeleter
 {
@@ -37,16 +38,19 @@ public:
 	[[nodiscard]] int Run(int argc, wchar_t* argv[]);
 
 private:
-	static void WINAPI ServiceMain(DWORD argc, LPWSTR* argv);
-	static void WINAPI ServiceCtrlHandler(DWORD ctrl) noexcept;
+	static void WINAPI						  _serviceMain(DWORD argc, LPWSTR* argv);
+	static void WINAPI						  _serviceCtrlHandler(DWORD ctrl) noexcept;
+	static void								  _updateStatus(DWORD state, DWORD exitCode = NO_ERROR, DWORD waitHint = 0) noexcept;
+	static std::expected<LaunchResult, DWORD> _launchChild(std::wstring_view cmdLine);
+	static UniqueHandle						  _createJobAndAssignProcess(HANDLE hProcess);
+	static std::wstring						  _commandLine(DWORD argc, LPWSTR* argv);
 
-	static void										 UpdateStatus(DWORD state, DWORD exitCode = NO_ERROR, DWORD waitHint = 0) noexcept;
+	inline static std::wstring			_exe_name;
+	inline static std::filesystem::path _exe_path;
+	inline static std::filesystem::path _working_dir;
 
-	static std::expected<LaunchResult, DWORD> LaunchChild(std::wstring_view cmdLine);
-	static UniqueHandle								 CreateJobAndAssignProcess(HANDLE hProcess);
-
-	inline static SERVICE_STATUS		s_Status{};
-	inline static SERVICE_STATUS_HANDLE s_StatusHandle{};
-	inline static UniqueHandle			s_hStopEvent;
-	inline static UniqueHandle			s_hJob;	   // Job object
+	inline static SERVICE_STATUS		_status{};
+	inline static SERVICE_STATUS_HANDLE _status_handle{};
+	inline static UniqueHandle			_h_stop_event;
+	inline static UniqueHandle			_h_job;	   // Job object
 };
