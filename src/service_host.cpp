@@ -14,6 +14,16 @@ void HandleDeleter::operator()(HANDLE h) const noexcept
 		CloseHandle(h);
 }
 
+namespace
+{
+	// Installed while broadcasting CTRL_C to the child's console so the host
+	// itself does not die from the event it just generated.
+	BOOL WINAPI IgnoreCtrlHandler(DWORD /*ctrl_type*/)
+	{
+		return TRUE;
+	}
+}
+
 static std::wstring Utf8ToWide(std::string_view utf8)
 {
 	if (utf8.empty())
@@ -159,18 +169,42 @@ void WINAPI ServiceHost::_serviceMain(DWORD argc, LPWSTR* argv)
 
 		if (waitResult == WAIT_OBJECT_0)
 		{
-			Logger::get().info(L"Stop signal received. Terminating child process...");
+			Logger::get().info(L"Stop signal received. Asking the child to exit gracefully...");
 
-			if (!TerminateProcess(res.hProcess.get(), 1))
+			bool childExited = false;
+
+			// The child owns a hidden console (CREATE_NEW_CONSOLE): attach to it
+			// and broadcast CTRL_C so the child can clean up (e.g. restore DNS).
+			if (AttachConsole(res.dwProcessId))
 			{
-				DWORD err = GetLastError();
-				Logger::get().error(L"TerminateProcess failed, error: {}", err);
+				SetConsoleCtrlHandler(IgnoreCtrlHandler, TRUE);
+				GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
+				SetConsoleCtrlHandler(IgnoreCtrlHandler, FALSE);
+				FreeConsole();
+
+				constexpr DWORD grace_ms = 15'000;
+				childExited				 = WaitForSingleObject(res.hProcess.get(), grace_ms) == WAIT_OBJECT_0;
+
+				if (childExited)
+					Logger::get().info(L"Child exited gracefully after CTRL_C.");
+				else
+					Logger::get().warning(L"Child did not exit within {} ms after CTRL_C.", grace_ms);
 			}
 			else
 			{
-				DWORD waitChild = WaitForSingleObject(res.hProcess.get(), 5'000);
+				Logger::get().warning(L"AttachConsole failed, error: {}", GetLastError());
+			}
 
-				if (waitChild == WAIT_OBJECT_0)
+			if (!childExited)
+			{
+				Logger::get().info(L"Forcing child process termination...");
+
+				if (!TerminateProcess(res.hProcess.get(), 1))
+				{
+					DWORD err = GetLastError();
+					Logger::get().error(L"TerminateProcess failed, error: {}", err);
+				}
+				else if (WaitForSingleObject(res.hProcess.get(), 5'000) == WAIT_OBJECT_0)
 					Logger::get().info(L"Child process terminated successfully.");
 				else
 					Logger::get().warning(L"Child process did not terminate in time.");
@@ -245,9 +279,9 @@ std::expected<LaunchResult, DWORD> ServiceHost::_launchChild(std::wstring_view c
 		cmd.data(),
 		nullptr,
 		nullptr,
-		TRUE,		// bInheritHandles
-		0,			// dwCreationFlags
-		nullptr,	// lpEnvironment
+		TRUE,					// bInheritHandles
+		CREATE_NEW_CONSOLE,		// own hidden console, so CTRL_C_EVENT reaches the child on stop
+		nullptr,				// lpEnvironment
 		_working_dir.wstring().c_str(),
 		&si,
 		&pi
